@@ -98,6 +98,8 @@ h3{font-family:'Oswald',sans-serif;font-weight:500;font-size:15px;letter-spacing
 .list-item .grow{flex:1;min-width:0}
 .list-item .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .list-item .sub{font-size:12px;color:var(--text-faint)}
+.list-item .qtd{font-size:13px;color:var(--text-soft);margin:1px 0}
+.list-item .qtd b{color:#9DB0FF;font-weight:600}
 .kcal{font-family:'Oswald',sans-serif;font-weight:500;font-size:16px;white-space:nowrap}
 .kcal small{font-family:'Inter';font-size:11px;color:var(--text-faint);margin-left:2px}
 .avatar{width:42px;height:42px;border-radius:12px;background:var(--surface-3);display:flex;align-items:center;justify-content:center;
@@ -367,11 +369,37 @@ function totals4(t){
   return `<div class="totals4 num"><div><b>${r0(t.k)}</b><small>kcal</small></div><div><b style="color:var(--prot)">${r0(t.p)}g</b><small>Prot</small></div>
     <div><b style="color:var(--carb)">${r0(t.c)}g</b><small>Carb</small></div><div><b style="color:var(--fat)">${r0(t.g)}g</b><small>Gord</small></div></div>`;
 }
+/* Medida caseira: a digitada no item; se não houver, calculada pela porção do alimento (ex.: 12 g de castanha = 3 unidades) */
+const FRAC = {0.25:'¼', 0.5:'½', 0.75:'¾'};
+function fmtQtd(n){
+  const i = Math.floor(n + 1e-9), fr = Math.round((n - i)*4)/4;
+  if (Math.abs(n - (i + fr)) < 0.03){
+    if (fr === 1) return String(i + 1);
+    if (!fr) return String(i);
+    return (i ? i + ' ' : '') + FRAC[fr];
+  }
+  return '≈ ' + r1(n);
+}
+const ADJ = /^(média|médio|pequeno|pequena|grande|drenada|drenado)$/;
+const plural = w => /[aeiouéêóô]$/i.test(w) ? w + 's' : /[rz]$/i.test(w) ? w + 'es' : w;
+function medida(it, f){
+  if (it.med) return it.med;
+  if (!f || !f.por || !(it.q > 0)) return '';
+  const mt = f.por[0].match(/^(\d+(?:[.,]\d+)?|½)\s+(.*)$/);
+  const base = mt ? (mt[1] === '½' ? 0.5 : num(mt[1])) : 1;
+  const words = (mt ? mt[2] : f.por[0]).split(' ');
+  const n = base * it.q / f.por[1];
+  if (n < 0.2) return '';
+  if (n > 1.01 && base <= 1){ words[0] = plural(words[0]); if (words[1] && ADJ.test(words[1])) words[1] = plural(words[1]); }
+  return `${fmtQtd(n)} ${words.join(' ')}`;
+}
+
 function itemRow(it, m, action){
-  const f = m[it.f], n = nutr(it, m);
+  const f = m[it.f], n = nutr(it, m), med = medida(it, f);
   return `<button class="list-item" data-a="${action}" data-id="${it.id}">
     <div class="grow"><div class="name">${f ? esc(f.n) : '<span class="faint">Alimento removido</span>'}</div>
-    <div class="sub num">${r0(it.q)} g · P ${r1(n.p)} · C ${r1(n.c)} · G ${r1(n.g)}</div></div>
+    <div class="qtd num">${med ? `<b>${esc(med)}</b> · ` : ''}${r0(it.q)} g</div>
+    <div class="sub num">P ${r1(n.p)} · C ${r1(n.c)} · G ${r1(n.g)}</div></div>
     <div class="kcal num">${r0(n.k)}<small>kcal</small></div></button>`;
 }
 
@@ -742,21 +770,28 @@ function pickFood(title, cb){
     qtyForm(f, f.por ? f.por[1] : 100, cb);
   });
 }
-function qtyForm(f, q, onSave, onDel){
+function qtyForm(f, q, onSave, onDel, med){
   const chips = f.por
     ? [0.5, 1, 2, 3].map(x => `<button type="button" class="chip" data-g="${f.por[1]*x}">${x === 0.5 ? '½' : x} × ${esc(f.por[0])}</button>`).join('')
     : [50, 100, 150, 200].map(x => `<button type="button" class="chip" data-g="${x}">${x} g</button>`).join('');
   openModal(esc(f.n), `<label class="f">Quantidade (g ou ml)<input id="qq" type="number" inputmode="decimal" step="any" value="${q}"></label>
-    <div class="chips">${chips}</div><div class="qprev" id="qp"></div>
+    <div class="chips">${chips}</div>
+    <label class="f">Medida caseira <span style="font-weight:400;color:var(--text-faint)">(opcional)</span>
+      <input id="qm" value="${esc(med || '')}" placeholder="Ex.: 2 colheres de sopa" autocomplete="off"></label>
+    <div class="faint" id="qmAuto" style="margin:-6px 0 10px"></div>
+    <div class="qprev" id="qp"></div>
     <div class="btn-row">${onDel ? '<button class="btn btn-danger" id="qdel">Remover</button>' : ''}<button class="btn btn-primary" id="qok">${onDel ? 'Salvar' : 'Adicionar'}</button></div>`);
   const inp = $('#qq');
   const prev = () => { const v = num(inp.value) || 0; $('#qp').innerHTML = totals4({k:f.k*v/100, p:f.p*v/100, c:f.c*v/100, g:f.g*v/100})
-    + (f.fib != null ? `<div class="note num" style="text-align:center">Fibra ${r1(f.fib*v/100)} g · Sódio ${r0(f.sod*v/100)} mg</div>` : ''); };
+    + (f.fib != null ? `<div class="note num" style="text-align:center">Fibra ${r1(f.fib*v/100)} g · Sódio ${r0(f.sod*v/100)} mg</div>` : '');
+    const auto = medida({q:v}, f);
+    $('#qm').placeholder = auto || 'Ex.: 2 colheres de sopa';
+    $('#qmAuto').textContent = auto ? `Em branco = automática: ${auto}` : 'Este alimento não tem porção cadastrada. Digite a medida para o aluno saber quanto comer.'; };
   inp.addEventListener('input', prev); prev();
-  $('#sheet').querySelectorAll('.chip').forEach(ch => ch.addEventListener('click', () => { inp.value = +(+ch.dataset.g).toFixed(1); prev(); }));
+  $('#sheet').querySelectorAll('.chip').forEach(ch => ch.addEventListener('click', () => { inp.value = +(+ch.dataset.g).toFixed(1); $('#qm').value = ''; prev(); }));
   $('#qok').addEventListener('click', () => {
     const v = num(inp.value); if (!(v > 0)) return toast('Informe a quantidade');
-    onSave(f, Math.round(v*10)/10); save(); closeModal(); render();
+    onSave(f, Math.round(v*10)/10, $('#qm').value.trim() || undefined); save(); closeModal(); render();
   });
   if (onDel) $('#qdel').addEventListener('click', () => { onDel(); save(); closeModal(); render(); });
   setTimeout(() => inp.select(), 60);
@@ -771,9 +806,8 @@ function planText(a){
     t += `\n*${r.nome}${r.hora ? ' (' + r.hora + ')' : ''}*\n`;
     for (const it of r.itens){
       const f = m[it.f]; if (!f) continue;
-      const x = f.por ? it.q/f.por[1] : 0;
-      const por = f.por && Math.abs(x - Math.round(x*2)/2) < 0.01 ? ` (${Math.abs(x-1) < 0.01 ? '' : r1(x) + ' × '}${f.por[0]})` : '';
-      t += `• ${f.n}: ${r0(it.q)} g${por}\n`;
+      const med = medida(it, f);
+      t += `• ${f.n}: ${med ? `${med} (${r0(it.q)} g)` : `${r0(it.q)} g`}\n`;
     }
   }
   if (a.plano.obs) t += `\n*Orientações*\n${a.plano.obs}\n`;
@@ -791,9 +825,9 @@ function printPlan(a){
   const c = calc(a), m = fmap();
   const refs = a.plano.refs.filter(r => r.itens.length).map(r => {
     const t = sum(r.itens, m);
-    return `<h2>${esc(r.nome)}${r.hora ? ' · ' + esc(r.hora) : ''}</h2><table><tr><th>Alimento</th><th class="r">Qtd</th><th class="r">kcal</th><th class="r">P</th><th class="r">C</th><th class="r">G</th></tr>
-      ${r.itens.map(it => { const f = m[it.f], n = nutr(it, m); return f ? `<tr><td>${esc(f.n)}</td><td class="r">${r0(it.q)} g</td><td class="r">${r0(n.k)}</td><td class="r">${r1(n.p)}</td><td class="r">${r1(n.c)}</td><td class="r">${r1(n.g)}</td></tr>` : ''; }).join('')}
-      <tr><th>Total</th><th></th><th class="r">${r0(t.k)}</th><th class="r">${r0(t.p)}</th><th class="r">${r0(t.c)}</th><th class="r">${r0(t.g)}</th></tr></table>`;
+    return `<h2>${esc(r.nome)}${r.hora ? ' · ' + esc(r.hora) : ''}</h2><table><tr><th>Alimento</th><th>Medida caseira</th><th class="r">Gramas</th><th class="r">kcal</th><th class="r">P</th><th class="r">C</th><th class="r">G</th></tr>
+      ${r.itens.map(it => { const f = m[it.f], n = nutr(it, m); return f ? `<tr><td>${esc(f.n)}</td><td><b>${esc(medida(it, f)) || '–'}</b></td><td class="r">${r0(it.q)} g</td><td class="r">${r0(n.k)}</td><td class="r">${r1(n.p)}</td><td class="r">${r1(n.c)}</td><td class="r">${r1(n.g)}</td></tr>` : ''; }).join('')}
+      <tr><th>Total</th><th></th><th></th><th class="r">${r0(t.k)}</th><th class="r">${r0(t.p)}</th><th class="r">${r0(t.c)}</th><th class="r">${r0(t.g)}</th></tr></table>`;
   }).join('');
   const tot = sum(a.plano.refs.flatMap(r => r.itens), m);
   $('#print').innerHTML = `<div class="ph"><img src="logo.png" alt=""><div><h1>Plano alimentar</h1><div>${esc(a.nome)} · ${fmtDate(today())}</div></div></div>
@@ -839,13 +873,13 @@ const ACT = {
   editRef: el => refForm(cur().plano.refs.find(r => r.id === el.dataset.id)),
   addPlanItem: el => {
     const r = cur().plano.refs.find(x => x.id === el.dataset.id);
-    pickFood(`Adicionar em ${esc(r.nome)}`, (f, q) => r.itens.push({id:uid(), f:f.id, q}));
+    pickFood(`Adicionar em ${esc(r.nome)}`, (f, q, med) => r.itens.push({id:uid(), f:f.id, q, med}));
   },
   editPlanItem: el => {
     const a = cur(), r = a.plano.refs.find(x => x.itens.some(i => i.id === el.dataset.id)), it = r.itens.find(i => i.id === el.dataset.id);
     const f = fmap()[it.f];
     if (!f){ if (confirm('Este alimento foi apagado da tabela. Remover do plano?')){ r.itens = r.itens.filter(i => i !== it); save(); render(); } return; }
-    qtyForm(f, it.q, (_, q) => { it.q = q; }, () => { r.itens = r.itens.filter(i => i !== it); });
+    qtyForm(f, it.q, (_, q, med) => { it.q = q; it.med = med; }, () => { r.itens = r.itens.filter(i => i !== it); }, it.med);
   },
   sharePlan: () => sharePlan(cur()),
   printPlan: () => printPlan(cur()),
@@ -854,16 +888,16 @@ const ACT = {
   dayToday: () => { UI.date = today(); render(); },
   addDiary: el => {
     const a = cur(), ref = el.dataset.ref;
-    pickFood(`Adicionar em ${esc(ref)}`, (f, q) => { (a.diario[UI.date] ||= []).push({id:uid(), ref, f:f.id, q}); });
+    pickFood(`Adicionar em ${esc(ref)}`, (f, q, med) => { (a.diario[UI.date] ||= []).push({id:uid(), ref, f:f.id, q, med}); });
   },
   editDiary: el => {
     const a = cur(), list = a.diario[UI.date], it = list.find(i => i.id === el.dataset.id), f = fmap()[it.f];
     const del = () => { a.diario[UI.date] = list.filter(i => i !== it); if (!a.diario[UI.date].length) delete a.diario[UI.date]; };
     if (!f){ if (confirm('Este alimento foi apagado da tabela. Remover do diário?')){ del(); save(); render(); } return; }
-    qtyForm(f, it.q, (_, q) => { it.q = q; }, del);
+    qtyForm(f, it.q, (_, q, med) => { it.q = q; it.med = med; }, del, it.med);
   },
   copyPlan: () => {
-    const a = cur(), items = a.plano.refs.flatMap(r => r.itens.map(it => ({id:uid(), ref:r.nome, f:it.f, q:it.q})));
+    const a = cur(), items = a.plano.refs.flatMap(r => r.itens.map(it => ({id:uid(), ref:r.nome, f:it.f, q:it.q, med:it.med})));
     if (!items.length) return toast('O plano alimentar está vazio');
     const has = (a.diario[UI.date] || []).length;
     if (has && !confirm('Este dia já tem registros. Substituir pelo plano?')) return;

@@ -1,6 +1,6 @@
 // Service worker: busca sempre a versão mais nova online e usa o cache
 // só quando estiver sem internet (assim o app abre offline também).
-const CACHE = 'nutrifit-v2';
+const CACHE = 'nutrifit-v3';
 const ASSETS = ['./', './index.html', './alimentos.js', './manifest.json', './logo.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
