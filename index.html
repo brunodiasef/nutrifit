@@ -23,6 +23,7 @@
   --radius:16px;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
 html{background:var(--bg)}
 body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;font-size:15px;line-height:1.45;min-height:100vh}
 button,input,select,textarea{font:inherit;color:inherit}
@@ -36,8 +37,20 @@ button{cursor:pointer;border:0;background:none}
 .brand{font-family:'Oswald',sans-serif;font-weight:600;letter-spacing:.06em;font-size:18px;line-height:1}
 .brand span{color:var(--blue)}
 .brand small{display:block;font-family:'Inter';font-weight:500;letter-spacing:0;font-size:11px;color:var(--text-faint);margin-top:3px}
-.who{margin-left:auto;display:flex;align-items:center;gap:6px;background:var(--surface-2);border:1px solid var(--border);
-  padding:7px 12px;border-radius:999px;font-size:13px;font-weight:600;max-width:46%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.top-r{margin-left:auto;display:flex;align-items:center;gap:8px;min-width:0}
+.who{display:flex;align-items:center;gap:6px;background:var(--surface-2);border:1px solid var(--border);
+  padding:7px 12px;border-radius:999px;font-size:13px;font-weight:600;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sync{width:34px;height:34px;border-radius:999px;display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  background:var(--surface-2);border:1px solid var(--border);color:var(--text-faint)}
+.sync svg{width:18px;height:18px}
+.sync.ok{color:var(--green)} .sync.busy,.sync.offline{color:var(--amber)} .sync.err{color:var(--red)}
+.sync.busy svg{animation:pulse 1s ease-in-out infinite alternate}
+@keyframes pulse{from{opacity:1}to{opacity:.35}}
+body.login .nav{display:none}
+.login-card{margin-top:24px}
+.login-card h2{margin-bottom:6px}
+.login-card p{margin-bottom:16px}
+.center{text-align:center}
 
 /* typography */
 h2{font-family:'Oswald',sans-serif;font-weight:600;font-size:24px;letter-spacing:.02em;line-height:1.15}
@@ -205,7 +218,10 @@ textarea{resize:vertical;min-height:70px}
   <header class="top">
     <img src="marca.png" alt="Bruno Personal Trainer">
     <div class="brand">NUTRI<span>FIT</span><small>Bruno Personal Trainer</small></div>
-    <button class="who" id="who" data-a="nav" data-v="alunos" hidden></button>
+    <div class="top-r">
+      <button class="sync" id="sync" data-a="nav" data-v="alunos" aria-label="Nuvem" hidden></button>
+      <button class="who" id="who" data-a="nav" data-v="alunos" hidden></button>
+    </div>
   </header>
   <main id="main"></main>
 </div>
@@ -296,8 +312,259 @@ function load(){
 function save(){
   try{ localStorage.setItem(KEY, JSON.stringify(S)); }
   catch(e){ toast('Não foi possível salvar neste navegador'); }
+  cloudTouch();
 }
 function cur(){ return S.alunos.find(a => a.id === S.cur) || null; }
+
+/* ================= NUVEM (Supabase) =================
+   O app continua salvando primeiro no aparelho (funciona sem internet) e envia uma cópia
+   para a nuvem logo depois. Cada conta tem uma linha na tabela nutrifit_dados com todos os dados.
+   Para não sobrescrever o que outro aparelho salvou, o envio só é aceito se a versão da nuvem
+   ainda for a mesma que este aparelho viu por último (campo atualizado_em). */
+const SB_URL = 'https://ukejsdsajrtpordtutcl.supabase.co';
+const SB_KEY = 'sb_publishable_8V0GqPzVYJXWQsxaaYVKiw_TH7qCVYl';
+const AUTH_KEY = 'nutrifit:auth', SYNC_KEY = 'nutrifit:sync', SEMCONTA_KEY = 'nutrifit:semconta', ANTERIOR_KEY = 'nutrifit:anterior';
+const Cloud = {sess:null, meta:{owner:null, dirty:false, remoteAt:null}, state:'off', msg:'', edits:0,
+  ready:false, pending:null, busy:null, again:false, timer:null, refreshing:null};
+
+const lsGet = k => { try{ return JSON.parse(localStorage.getItem(k)); }catch(e){ return null; } };
+const lsSet = (k, v) => { try{ v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
+const saveMeta = () => lsSet(SYNC_KEY, Cloud.meta);
+const isEmptyData = d => !d.alunos.length && !d.foods.length;
+// JSON com chaves em ordem fixa (o banco reordena as chaves), ignorando o aluno selecionado
+function canon(o){
+  if (Array.isArray(o)) return '[' + o.map(canon).join(',') + ']';
+  if (o && typeof o === 'object') return '{' + Object.keys(o).filter(k => k !== 'cur' && o[k] !== undefined).sort().map(k => JSON.stringify(k) + ':' + canon(o[k])).join(',') + '}';
+  return JSON.stringify(o);
+}
+
+const ERR_PT = [
+  [/invalid login credentials/i, 'E-mail ou senha incorretos'],
+  [/email not confirmed/i, 'Confirme seu e-mail antes de entrar (veja a caixa de entrada e o spam)'],
+  [/already (been )?registered|already exists/i, 'Este e-mail já tem conta. Use “Entrar”.'],
+  [/at least 6|password should/i, 'A senha precisa ter pelo menos 6 caracteres'],
+  [/rate limit|too many|security purposes/i, 'Muitas tentativas. Aguarde alguns minutos e tente de novo.'],
+  [/invalid.*email|validate email/i, 'E-mail inválido'],
+  [/signups? not allowed|signup.*disabled/i, 'A criação de novas contas está desativada'],
+  [/same.*password|different from the old/i, 'A nova senha precisa ser diferente da anterior'],
+];
+function errPt(e){
+  if (e instanceof TypeError) return 'Sem conexão com a internet';
+  const m = e && e.message || ''; const t = ERR_PT.find(([re]) => re.test(m));
+  return t ? t[1] : m || 'Erro inesperado';
+}
+
+async function sb(path, {method = 'GET', body, prefer, auth = true, bearer} = {}){
+  const h = {apikey:SB_KEY, 'Content-Type':'application/json'};
+  if (bearer || auth) h.Authorization = 'Bearer ' + (bearer || await sbToken());
+  if (prefer) h.Prefer = prefer;
+  const r = await fetch(SB_URL + path, {method, headers:h, body:body === undefined ? undefined : JSON.stringify(body), cache:'no-store'});
+  const t = await r.text(); let d = null; try{ d = t ? JSON.parse(t) : null; }catch(e){}
+  if (!r.ok){
+    const e = new Error((d && (d.msg || d.error_description || d.message || d.error)) || 'Erro ' + r.status);
+    e.status = r.status; e.code = d && (d.error_code || d.code); throw e;
+  }
+  return d;
+}
+function setSession(d, user){
+  const u = user || d.user;
+  Cloud.sess = {at:d.access_token, rt:d.refresh_token, exp:Date.now() + (d.expires_in || 3600)*1000, uid:u.id, email:u.email};
+  lsSet(AUTH_KEY, Cloud.sess);
+}
+async function sbToken(){
+  const s = Cloud.sess; if (!s) throw Object.assign(new Error('Sessão encerrada'), {expired:true});
+  if (Date.now() < s.exp - 60000) return s.at;
+  Cloud.refreshing ||= sb('/auth/v1/token?grant_type=refresh_token', {method:'POST', body:{refresh_token:s.rt}, auth:false})
+    .then(d => setSession(d))
+    .catch(e => { if (e.status >= 400 && e.status < 500) endSession(true); throw e; })
+    .finally(() => { Cloud.refreshing = null; });
+  await Cloud.refreshing;
+  return Cloud.sess.at;
+}
+function endSession(expired){
+  Cloud.sess = null; Cloud.ready = false; Cloud.pending = null; lsSet(AUTH_KEY, null);
+  setCloud('off');
+  if (expired){ toast('Sua sessão expirou. Entre novamente.'); render(); }
+}
+
+function setCloud(state, msg = ''){
+  Cloud.state = state; Cloud.msg = msg;
+  const el = $('#sync'); if (!el) return;
+  el.hidden = !Cloud.sess;
+  el.className = 'sync ' + ({ok:'ok', sync:'busy', offline:'offline', err:'err', conflict:'err'}[state] || '');
+  el.innerHTML = svg('nuvem', 2);
+  el.title = cloudText();
+  const st = $('#cloudStatus'); if (st) st.textContent = cloudText();
+}
+function cloudText(){
+  return {ok:'Tudo salvo na nuvem ✓', sync:'Sincronizando…', offline:'Sem internet — as alterações ficam no aparelho e vão para a nuvem quando a conexão voltar',
+    err:'Erro ao sincronizar: ' + Cloud.msg, conflict:'Os dados da nuvem e deste aparelho estão diferentes — escolha qual manter', off:'Desconectado'}[Cloud.state] || '';
+}
+
+// Chamado a cada alteração: marca como pendente e envia em seguida
+function cloudTouch(){
+  if (!Cloud.sess) return;
+  Cloud.meta.dirty = true; Cloud.edits++; saveMeta();
+  clearTimeout(Cloud.timer); Cloud.timer = setTimeout(cloudRun, 1200);
+  if (Cloud.state === 'ok') setCloud('sync');
+}
+// Executa uma sincronização por vez
+function cloudRun(){
+  if (Cloud.busy){ Cloud.again = true; return Cloud.busy; }
+  Cloud.busy = (async () => {
+    let n = 0;
+    do { Cloud.again = false; await cloudStep(); } while (Cloud.again && Cloud.sess && !Cloud.pending && ++n < 4);
+    if (Cloud.again && n >= 4) setCloud('err', 'tente “Sincronizar agora”');
+  })()
+    .finally(() => { Cloud.busy = null; });
+  return Cloud.busy;
+}
+async function cloudStep(){
+  if (!Cloud.sess || Cloud.pending) return;
+  setCloud('sync');
+  try{
+    if (!Cloud.ready) await reconcile();
+    else if (Cloud.meta.dirty && await push() === 'conflict'){ Cloud.ready = false; Cloud.again = true; return; }
+    if (Cloud.pending) setCloud('conflict');
+    else if (!Cloud.meta.dirty) setCloud('ok');
+  }catch(e){
+    if (!Cloud.sess) return;
+    if (e instanceof TypeError || !navigator.onLine) setCloud('offline');
+    else setCloud('err', errPt(e));
+  }
+}
+// Envia os dados deste aparelho. Só grava se a nuvem não mudou desde a última vez que este aparelho a viu.
+async function push(){
+  const n = Cloud.edits, m = Cloud.meta, u = Cloud.sess.uid;
+  const body = {dados:S, atualizado_em:new Date().toISOString()};
+  let rows;
+  if (m.remoteAt){
+    rows = await sb(`/rest/v1/nutrifit_dados?user_id=eq.${u}&atualizado_em=eq.${encodeURIComponent(m.remoteAt)}&select=atualizado_em`,
+      {method:'PATCH', body, prefer:'return=representation'});
+    if (!rows || !rows.length) return 'conflict';
+  } else {
+    try{ rows = await sb('/rest/v1/nutrifit_dados?select=atualizado_em', {method:'POST', body:{user_id:u, ...body}, prefer:'return=representation'}); }
+    catch(e){ if (e.status === 409) return 'conflict'; throw e; }
+  }
+  m.remoteAt = rows[0].atualizado_em; m.owner = u;
+  if (Cloud.edits === n) m.dirty = false;
+  saveMeta();
+  return 'ok';
+}
+// Compara o que está na nuvem com o que está no aparelho e decide quem vale
+async function reconcile(){
+  const rows = await sb('/rest/v1/nutrifit_dados?select=dados,atualizado_em');
+  const row = rows && rows[0], m = Cloud.meta, mine = m.owner === Cloud.sess.uid;
+  if (!row){
+    if (!mine){ m.owner = Cloud.sess.uid; m.remoteAt = null; m.dirty = true; Cloud.edits++; saveMeta(); }
+    if (m.dirty && await push() === 'conflict'){ Cloud.again = true; return; }
+  } else if (mine && row.atualizado_em === m.remoteAt){
+    if (m.dirty && await push() === 'conflict'){ Cloud.again = true; return; }
+  } else if ((mine && !m.dirty) || isEmptyData(S) || canon(S) === canon(row.dados)){
+    adopt(row);
+  } else {
+    Cloud.pending = row; askConflict(); return;
+  }
+  Cloud.ready = true;
+}
+function adopt(row){
+  const keep = S.cur;
+  S = Object.assign({alunos:[], foods:[], cur:null}, row.dados);
+  if (S.alunos.some(a => a.id === keep)) S.cur = keep;
+  try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
+  Object.assign(Cloud.meta, {owner:Cloud.sess.uid, remoteAt:row.atualizado_em, dirty:false}); saveMeta();
+  if (UI){ if (!cur() && !['alunos','alimentos'].includes(UI.view)) UI.view = 'alunos'; render(); }
+}
+function askConflict(){
+  const row = Cloud.pending; if (!row) return;
+  const nAl = d => `${d.alunos.length} aluno(s), ${d.foods.length} alimento(s) próprio(s)`;
+  const quando = new Date(row.atualizado_em).toLocaleString('pt-BR', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'});
+  const outro = Cloud.meta.owner === Cloud.sess.uid;
+  openModal('Dados diferentes', `
+    <p class="muted" style="margin-bottom:14px">${outro
+      ? 'Os dados foram alterados em outro aparelho enquanto este também tinha alterações não enviadas.'
+      : 'Este aparelho já tinha dados salvos antes de você entrar, e sua conta na nuvem também tem dados.'} Escolha qual versão manter:</p>
+    <div class="card" style="background:var(--surface-2)"><b>Nuvem</b><div class="faint">${nAl(Object.assign({alunos:[], foods:[]}, row.dados))} · salvo em ${quando}</div></div>
+    <div class="card" style="background:var(--surface-2)"><b>Este aparelho</b><div class="faint">${nAl(S)}</div></div>
+    <div class="btn-row"><button class="btn" data-a="keepLocal">Manter deste aparelho</button><button class="btn btn-primary" data-a="useCloud">Usar os da nuvem</button></div>
+    <p class="note">A versão não escolhida será substituída. Se tiver dúvida, use “Salvar backup” antes de escolher.</p>`);
+  setCloud('conflict');
+}
+function resolveConflict(useCloud){
+  const row = Cloud.pending; if (!row) return closeModal();
+  Cloud.pending = null; closeModal();
+  if (useCloud){ lsSet(ANTERIOR_KEY, S); adopt(row); Cloud.ready = true; setCloud('ok'); toast('Dados da nuvem carregados'); }
+  else {
+    Object.assign(Cloud.meta, {owner:Cloud.sess.uid, remoteAt:row.atualizado_em, dirty:true}); Cloud.edits++; saveMeta();
+    Cloud.ready = true; cloudRun();
+  }
+}
+
+/* Login, cadastro e senha */
+const needLogin = () => !Cloud.sess && !lsGet(SEMCONTA_KEY);
+const redirectTo = () => encodeURIComponent(location.origin + location.pathname);
+async function doLogin(email, password, criar){
+  if (criar){
+    const d = await sb(`/auth/v1/signup?redirect_to=${redirectTo()}`, {method:'POST', body:{email, password}, auth:false});
+    if (!d.access_token){
+      if (d.identities && !d.identities.length) throw new Error('already registered');
+      return 'confirm';
+    }
+    setSession(d);
+  } else {
+    setSession(await sb('/auth/v1/token?grant_type=password', {method:'POST', body:{email, password}, auth:false}));
+  }
+  lsSet(SEMCONTA_KEY, null); Cloud.ready = false;
+  return 'ok';
+}
+async function logout(){
+  if (Cloud.meta.dirty){
+    await cloudRun();
+    if (Cloud.meta.dirty && !confirm('Há alterações que ainda não foram para a nuvem e serão perdidas neste aparelho. Sair mesmo assim?')) return;
+  } else if (!confirm('Sair da conta? Os dados continuam na nuvem e voltam quando você entrar de novo.')) return;
+  const at = Cloud.sess && Cloud.sess.at;
+  if (at) fetch(SB_URL + '/auth/v1/logout', {method:'POST', headers:{apikey:SB_KEY, Authorization:'Bearer ' + at}}).catch(() => {});
+  endSession(false);
+  Cloud.meta = {owner:null, dirty:false, remoteAt:null}; saveMeta(); lsSet(ANTERIOR_KEY, null);
+  S = {alunos:[], foods:[], cur:null}; try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
+  UI.view = 'alunos'; render();
+}
+function passwordForm(){
+  openModal('Nova senha', `<form id="fPass">
+    <label class="f">Nova senha<input name="p" type="password" autocomplete="new-password" minlength="6" required></label>
+    <button class="btn btn-primary btn-block">Salvar senha</button></form>`);
+  $('#fPass').addEventListener('submit', async e => {
+    e.preventDefault(); const b = e.target.querySelector('button'); b.disabled = true;
+    try{ await sb('/auth/v1/user', {method:'PUT', body:{password:e.target.p.value}}); closeModal(); toast('Senha alterada'); }
+    catch(err){ toast(errPt(err)); b.disabled = false; }
+  });
+}
+// Volta dos links enviados por e-mail (confirmação de cadastro e recuperação de senha)
+async function handleAuthLink(){
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (!h.get('access_token') && !h.get('error_description')) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  if (h.get('error_description')) return toast(/expired/i.test(h.get('error_description')) ? 'O link expirou. Peça um novo.' : h.get('error_description'));
+  try{
+    const d = {access_token:h.get('access_token'), refresh_token:h.get('refresh_token'), expires_in:+h.get('expires_in') || 3600};
+    setSession(d, await sb('/auth/v1/user', {bearer:d.access_token}));
+    lsSet(SEMCONTA_KEY, null); Cloud.ready = false; render(); cloudRun();
+    if (h.get('type') === 'recovery') passwordForm();
+    else toast('E-mail confirmado! Você está conectado.');
+  }catch(e){ toast(errPt(e)); }
+}
+function cloudInit(){
+  Cloud.sess = lsGet(AUTH_KEY);
+  Cloud.meta = Object.assign({owner:null, dirty:false, remoteAt:null}, lsGet(SYNC_KEY));
+  if (Cloud.sess) setCloud('sync');
+  addEventListener('online', () => cloudRun());
+  document.addEventListener('visibilitychange', () => {
+    if (!Cloud.sess) return;
+    if (document.hidden){ if (Cloud.meta.dirty){ clearTimeout(Cloud.timer); cloudRun(); } }
+    // Ao voltar para o app, confere se outro aparelho mudou algo (sem atrapalhar uma janela aberta)
+    else if (!$('#overlay').classList.contains('open')){ Cloud.ready = false; cloudRun(); }
+  });
+}
 
 /* ================= UTIL ================= */
 const $ = s => document.querySelector(s);
@@ -348,6 +615,7 @@ const ICONS = {
   plano:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
   diario:'<path d="M3 11h18M12 3v18"/><circle cx="12" cy="12" r="9"/>',
   agua:'<path d="M12 2.7s6 6.4 6 11.3a6 6 0 0 1-12 0c0-4.9 6-11.3 6-11.3z"/>',
+  nuvem:'<path d="M17.5 19H7a5 5 0 1 1 1.1-9.88A6 6 0 0 1 19.4 11.1 4 4 0 0 1 17.5 19z"/>',
 };
 const svg = (k, sw=1.9) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${ICONS[k]}</svg>`;
 const plus = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
@@ -418,11 +686,52 @@ function vAlunos(){
     <div class="card-head"><h3>Tabela de alimentos</h3><button class="btn btn-sm" data-a="nav" data-v="alimentos">Abrir</button></div>
     <div class="faint">${FOODS.length} alimentos prontos + ${S.foods.length} cadastrados por você.</div>
   </section>
+  ${vConta()}
   <section class="card">
     <h3>Backup</h3>
-    <div class="faint" style="margin-bottom:12px">Os dados ficam salvos só neste aparelho. Faça backup de vez em quando para não perder nada se trocar de celular ou limpar o navegador.</div>
+    <div class="faint" style="margin-bottom:12px">Uma cópia em arquivo, para guardar por segurança ou passar os dados para outra conta.</div>
     <div class="btn-row"><button class="btn" data-a="export">Salvar backup</button><button class="btn" data-a="import">Restaurar backup</button></div>
   </section>`;
+}
+function vConta(){
+  if (!Cloud.sess) return `<section class="card"><h3>Conta e nuvem</h3>
+    <div class="warn" style="margin:0 0 12px">Você está usando sem conta: os dados ficam só neste aparelho e podem se perder se o navegador for limpado.</div>
+    <button class="btn btn-primary btn-block" data-a="goLogin">Entrar ou criar conta</button></section>`;
+  return `<section class="card"><h3>Conta e nuvem</h3>
+    <div style="font-weight:600;word-break:break-all">${esc(Cloud.sess.email)}</div>
+    <div class="faint" id="cloudStatus" style="margin:2px 0 12px">${esc(cloudText())}</div>
+    ${Cloud.pending ? '<button class="btn btn-primary btn-block" data-a="askConflict" style="margin-bottom:8px">Escolher qual versão manter</button>' : ''}
+    <div class="btn-row"><button class="btn" data-a="syncNow">Sincronizar agora</button><button class="btn" data-a="changePass">Trocar senha</button><button class="btn btn-danger" data-a="logout">Sair</button></div>
+  </section>`;
+}
+function vLogin(){
+  const n = S.alunos.length;
+  return `<section class="card login-card">
+    <h2>Entrar</h2>
+    <p class="muted">Seus alunos ficam salvos na nuvem e aparecem em qualquer celular ou computador em que você entrar.</p>
+    <form id="fLogin">
+      <label class="f">E-mail<input name="email" type="email" autocomplete="username" inputmode="email" required></label>
+      <label class="f">Senha<input name="senha" type="password" autocomplete="current-password" minlength="6" required></label>
+      <div class="btn-row"><button class="btn" value="up">Criar conta</button><button class="btn btn-primary" value="in">Entrar</button></div>
+      <div class="warn" id="loginMsg" hidden></div>
+    </form>
+    <div class="center" style="margin-top:14px"><button class="link" data-a="forgot">Esqueci minha senha</button></div>
+    ${n ? `<p class="note">Os ${n} aluno(s) já salvos neste aparelho vão para a sua conta quando você entrar.</p>` : ''}
+  </section>
+  <div class="center"><button class="link" style="color:var(--text-faint)" data-a="noAccount">Continuar sem conta (dados só neste aparelho)</button></div>`;
+}
+function bindLogin(){
+  const f = $('#fLogin'), msg = t => { const m = $('#loginMsg'); m.hidden = !t; m.textContent = t || ''; };
+  f.addEventListener('submit', async e => {
+    e.preventDefault();
+    const criar = e.submitter && e.submitter.value === 'up', btns = f.querySelectorAll('button');
+    msg(''); btns.forEach(b => b.disabled = true);
+    try{
+      const r = await doLogin(f.email.value.trim(), f.senha.value, criar);
+      if (r === 'confirm'){ msg('Conta criada! Abra o link que enviamos para o seu e-mail para confirmar e depois toque em Entrar.'); btns.forEach(b => b.disabled = false); return; }
+      UI.view = cur() ? 'resumo' : 'alunos'; render(); cloudRun(); toast('Conectado');
+    }catch(err){ msg(errPt(err)); btns.forEach(b => b.disabled = false); }
+  });
 }
 
 function vResumo(a){
@@ -625,6 +934,10 @@ function drawFoodList(){
 
 /* ================= RENDER ================= */
 function render(){
+  const login = needLogin();
+  document.body.classList.toggle('login', login);
+  setCloud(Cloud.state, Cloud.msg);
+  if (login){ $('#who').hidden = true; $('#main').innerHTML = vLogin(); bindLogin(); return; }
   const a = cur();
   if (!a && !['alunos','alimentos'].includes(UI.view)) UI.view = 'alunos';
   const who = $('#who');
@@ -929,6 +1242,20 @@ const ACT = {
   },
   export: exportData,
   import: () => $('#fileIn').click(),
+  goLogin: () => { lsSet(SEMCONTA_KEY, null); render(); scrollTo(0, 0); },
+  noAccount: () => { lsSet(SEMCONTA_KEY, true); UI.view = cur() ? 'resumo' : 'alunos'; render(); },
+  forgot: async () => {
+    const email = ($('#fLogin') && $('#fLogin').email.value.trim()) || prompt('Seu e-mail:');
+    if (!email) return;
+    try{ await sb(`/auth/v1/recover?redirect_to=${redirectTo()}`, {method:'POST', body:{email}, auth:false}); toast('Enviamos um link para criar nova senha. Veja seu e-mail.'); }
+    catch(err){ toast(errPt(err)); }
+  },
+  syncNow: () => { Cloud.ready = false; cloudRun().then(() => { if (Cloud.state === 'ok') toast('Sincronizado'); }); },
+  changePass: passwordForm,
+  logout,
+  askConflict,
+  keepLocal: () => resolveConflict(false),
+  useCloud: () => resolveConflict(true),
 };
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-a]'); if (!el || el.disabled) return;
@@ -946,7 +1273,10 @@ document.addEventListener('change', e => {
 /* ================= INÍCIO ================= */
 S = load();
 UI = {view: cur() ? 'resumo' : 'alunos', date: today()};
+cloudInit();
 render();
+handleAuthLink();
+if (Cloud.sess) cloudRun();
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>

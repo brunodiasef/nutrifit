@@ -1,6 +1,6 @@
 // Service worker: busca sempre a versão mais nova online e usa o cache
 // só quando estiver sem internet (assim o app abre offline também).
-const CACHE = 'nutrifit-v4';
+const CACHE = 'nutrifit-v5';
 const ASSETS = ['./', './index.html', './alimentos.js', './manifest.json', './marca.png', './nutrifit-logo-impressao.png', './favicon.png', './apple-touch-icon.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -18,6 +18,8 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
+  // Dados da nuvem (Supabase) nunca passam pelo cache
+  if (new URL(req.url).hostname.endsWith('supabase.co')) return;
   event.respondWith(
     fetch(req)
       .then((res) => {
