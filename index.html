@@ -219,7 +219,7 @@ textarea{resize:vertical;min-height:70px}
     <img src="marca.png" alt="Bruno Personal Trainer">
     <div class="brand">NUTRI<span>FIT</span><small>Bruno Personal Trainer</small></div>
     <div class="top-r">
-      <button class="sync" id="sync" data-a="nav" data-v="alunos" aria-label="Nuvem" hidden></button>
+      <button class="sync" id="sync" data-a="nav" data-v="conta" aria-label="Conta"></button>
       <button class="who" id="who" data-a="nav" data-v="alunos" hidden></button>
     </div>
   </header>
@@ -390,10 +390,9 @@ function endSession(expired){
 function setCloud(state, msg = ''){
   Cloud.state = state; Cloud.msg = msg;
   const el = $('#sync'); if (!el) return;
-  el.hidden = !Cloud.sess;
   el.className = 'sync ' + ({ok:'ok', sync:'busy', offline:'offline', err:'err', conflict:'err'}[state] || '');
   el.innerHTML = svg('nuvem', 2);
-  el.title = cloudText();
+  el.title = Cloud.sess ? cloudText() : 'Conta';
   const st = $('#cloudStatus'); if (st) st.textContent = cloudText();
 }
 function cloudText(){
@@ -473,7 +472,7 @@ function adopt(row){
   if (S.alunos.some(a => a.id === keep)) S.cur = keep;
   try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
   Object.assign(Cloud.meta, {owner:Cloud.sess.uid, remoteAt:row.atualizado_em, dirty:false}); saveMeta();
-  if (UI){ if (!cur() && !['alunos','alimentos'].includes(UI.view)) UI.view = 'alunos'; render(); }
+  if (UI){ if (!cur() && !['alunos','alimentos','conta'].includes(UI.view)) UI.view = 'alunos'; render(); }
 }
 function askConflict(){
   const row = Cloud.pending; if (!row) return;
@@ -686,7 +685,10 @@ function vAlunos(){
     <div class="card-head"><h3>Tabela de alimentos</h3><button class="btn btn-sm" data-a="nav" data-v="alimentos">Abrir</button></div>
     <div class="faint">${FOODS.length} alimentos prontos + ${S.foods.length} cadastrados por você.</div>
   </section>
-  ${vConta()}
+`;
+}
+function vConfig(){
+  return `<div class="page-title"><h2>Conta</h2></div>${vConta()}
   <section class="card">
     <h3>Backup</h3>
     <div class="faint" style="margin-bottom:12px">Uma cópia em arquivo, para guardar por segurança ou passar os dados para outra conta.</div>
@@ -937,20 +939,22 @@ function render(){
   const login = needLogin();
   document.body.classList.toggle('login', login);
   setCloud(Cloud.state, Cloud.msg);
+  $('#sync').hidden = login;
   if (login){ $('#who').hidden = true; $('#main').innerHTML = vLogin(); bindLogin(); return; }
   const a = cur();
-  if (!a && !['alunos','alimentos'].includes(UI.view)) UI.view = 'alunos';
+  if (!a && !['alunos','alimentos','conta'].includes(UI.view)) UI.view = 'alunos';
   const who = $('#who');
   who.hidden = !a; if (a) who.textContent = a.nome.split(' ')[0];
   const main = $('#main');
   main.innerHTML = UI.view === 'alunos' ? vAlunos()
+    : UI.view === 'conta' ? vConfig()
     : UI.view === 'alimentos' ? vAlimentos()
     : UI.view === 'resumo' ? vResumo(a)
     : UI.view === 'plano' ? vPlano(a)
     : UI.view === 'diario' ? vDiario(a)
     : vAgua(a);
   const tabs = [['alunos','Alunos'],['resumo','Resumo'],['plano','Plano'],['diario','Diário'],['agua','Água/Peso']];
-  $('#nav').innerHTML = tabs.map(([v, l]) => `<button data-a="nav" data-v="${v}" class="${UI.view === v || (v === 'alunos' && UI.view === 'alimentos') ? 'on' : ''}" ${v !== 'alunos' && !a ? 'disabled' : ''}>${svg(v)}${l}</button>`).join('');
+  $('#nav').innerHTML = tabs.map(([v, l]) => `<button data-a="nav" data-v="${v}" class="${UI.view === v || (v === 'alunos' && ['alimentos','conta'].includes(UI.view)) ? 'on' : ''}" ${v !== 'alunos' && !a ? 'disabled' : ''}>${svg(v)}${l}</button>`).join('');
   if ($("#foodSearch")){ $("#foodSearch").addEventListener("input", drawFoodList); $("#foodCat").addEventListener("change", drawFoodList); drawFoodList(); }
 }
 
