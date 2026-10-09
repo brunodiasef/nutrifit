@@ -231,7 +231,6 @@ textarea{resize:vertical;min-height:70px}
 <div class="overlay" id="overlay"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
 <div id="print"></div>
-<input type="file" id="fileIn" accept="application/json,.json" hidden>
 
 <script src="alimentos.js"></script>
 <script>
@@ -486,7 +485,7 @@ function askConflict(){
     <div class="card" style="background:var(--surface-2)"><b>Nuvem</b><div class="faint">${nAl(Object.assign({alunos:[], foods:[]}, row.dados))} · salvo em ${quando}</div></div>
     <div class="card" style="background:var(--surface-2)"><b>Este aparelho</b><div class="faint">${nAl(S)}</div></div>
     <div class="btn-row"><button class="btn" data-a="keepLocal">Manter deste aparelho</button><button class="btn btn-primary" data-a="useCloud">Usar os da nuvem</button></div>
-    <p class="note">A versão não escolhida será substituída. Se tiver dúvida, use “Salvar backup” antes de escolher.</p>`);
+    <p class="note">A versão não escolhida será substituída.</p>`);
   setCloud('conflict');
 }
 function resolveConflict(useCloud){
@@ -688,12 +687,7 @@ function vAlunos(){
 `;
 }
 function vConfig(){
-  return `<div class="page-title"><h2>Conta</h2></div>${vConta()}
-  <section class="card">
-    <h3>Backup</h3>
-    <div class="faint" style="margin-bottom:12px">Uma cópia em arquivo, para guardar por segurança ou passar os dados para outra conta.</div>
-    <div class="btn-row"><button class="btn" data-a="export">Salvar backup</button><button class="btn" data-a="import">Restaurar backup</button></div>
-  </section>`;
+  return `<div class="page-title"><h2>Conta</h2></div>${vConta()}`;
 }
 function vConta(){
   if (!Cloud.sess) return `<section class="card"><h3>Conta e nuvem</h3>
@@ -1156,25 +1150,6 @@ function printPlan(a){
   setTimeout(() => window.print(), 150);
 }
 
-/* ================= BACKUP ================= */
-function exportData(){
-  const blob = new Blob([JSON.stringify(S, null, 1)], {type:'application/json'});
-  const url = URL.createObjectURL(blob), link = document.createElement('a');
-  link.href = url; link.download = `nutrifit-backup-${today()}.json`;
-  document.body.appendChild(link); link.click(); link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  toast('Backup salvo');
-}
-$('#fileIn').addEventListener('change', async e => {
-  const file = e.target.files[0]; e.target.value = ''; if (!file) return;
-  try{
-    const d = JSON.parse(await file.text());
-    if (!d || !Array.isArray(d.alunos)) throw new Error('formato');
-    if (!confirm(`Restaurar backup com ${d.alunos.length} aluno(s)? Os dados atuais deste aparelho serão substituídos.`)) return;
-    S = Object.assign({foods:[], cur:null}, d); save(); UI.view = cur() ? 'resumo' : 'alunos'; render(); toast('Backup restaurado');
-  }catch(err){ toast('Arquivo de backup inválido'); }
-});
-
 /* ================= AÇÕES ================= */
 const ACT = {
   nav: el => { UI.view = el.dataset.v; closeModal(); render(); scrollTo(0, 0); },
@@ -1244,8 +1219,6 @@ const ACT = {
     if (!confirm(`Apagar "${f.n}" da tabela?`)) return;
     S.foods = S.foods.filter(x => x !== f); save(); render();
   },
-  export: exportData,
-  import: () => $('#fileIn').click(),
   goLogin: () => { lsSet(SEMCONTA_KEY, null); render(); scrollTo(0, 0); },
   noAccount: () => { lsSet(SEMCONTA_KEY, true); UI.view = cur() ? 'resumo' : 'alunos'; render(); },
   forgot: async () => {
