@@ -6,8 +6,8 @@
 <title>NutriFit · Bruno Personal</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0B0C10">
-<link rel="icon" href="icon-192.png">
-<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -32,7 +32,7 @@ button{cursor:pointer;border:0;background:none}
 /* header */
 .top{position:sticky;top:0;z-index:20;background:rgba(11,12,16,.92);backdrop-filter:blur(10px);
   margin:0 -16px;padding:calc(10px + env(safe-area-inset-top)) 16px 10px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border-soft)}
-.top img{height:38px;width:auto}
+.top img{height:42px;width:auto}
 .brand{font-family:'Oswald',sans-serif;font-weight:600;letter-spacing:.06em;font-size:18px;line-height:1}
 .brand span{color:var(--blue)}
 .brand small{display:block;font-family:'Inter';font-weight:500;letter-spacing:0;font-size:11px;color:var(--text-faint);margin-top:3px}
@@ -187,7 +187,7 @@ textarea{resize:vertical;min-height:70px}
   .app,.nav,.overlay,.toast{display:none!important}
   #print{display:block;font-family:'Inter',sans-serif;color:#000;padding:10px}
   #print .ph{display:flex;align-items:center;gap:16px;border-bottom:3px solid #4C6BFF;padding-bottom:12px;margin-bottom:16px}
-  #print .ph img{height:70px}
+  #print .ph img{height:110px}
   #print h1{font-family:'Oswald',sans-serif;font-size:24px}
   #print h2{font-size:16px;margin:16px 0 6px;color:#1a2a8a}
   #print table{width:100%;border-collapse:collapse;font-size:13px}
@@ -203,7 +203,7 @@ textarea{resize:vertical;min-height:70px}
 
 <div class="app">
   <header class="top">
-    <img src="logo.png" alt="Bruno Personal Trainer">
+    <img src="marca.png" alt="Bruno Personal Trainer">
     <div class="brand">NUTRI<span>FIT</span><small>Bruno Personal Trainer</small></div>
     <button class="who" id="who" data-a="nav" data-v="alunos" hidden></button>
   </header>
@@ -830,7 +830,7 @@ function printPlan(a){
       <tr><th>Total</th><th></th><th></th><th class="r">${r0(t.k)}</th><th class="r">${r0(t.p)}</th><th class="r">${r0(t.c)}</th><th class="r">${r0(t.g)}</th></tr></table>`;
   }).join('');
   const tot = sum(a.plano.refs.flatMap(r => r.itens), m);
-  $('#print').innerHTML = `<div class="ph"><img src="logo.png" alt=""><div><h1>Plano alimentar</h1><div>${esc(a.nome)} · ${fmtDate(today())}</div></div></div>
+  $('#print').innerHTML = `<div class="ph"><img src="nutrifit-logo-impressao.png" alt="NutriFit · Bruno Personal"><div><h1>Plano alimentar</h1><div>${esc(a.nome)} · ${fmtDate(today())}</div></div></div>
     <div class="meta">Meta diária: <b>${r0(c.meta)} kcal</b> · Proteína ${r0(c.p)} g · Carboidrato ${r0(c.c)} g · Gordura ${r0(c.g)} g<br>
     Total do plano: ${r0(tot.k)} kcal · P ${r0(tot.p)} g · C ${r0(tot.c)} g · G ${r0(tot.g)} g · Água: ${r1(c.agua/1000)} L/dia</div>
     ${refs || '<p>Plano vazio.</p>'}
