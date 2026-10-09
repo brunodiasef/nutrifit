@@ -322,7 +322,7 @@ function cur(){ return S.alunos.find(a => a.id === S.cur) || null; }
    ainda for a mesma que este aparelho viu por último (campo atualizado_em). */
 const SB_URL = 'https://ukejsdsajrtpordtutcl.supabase.co';
 const SB_KEY = 'sb_publishable_8V0GqPzVYJXWQsxaaYVKiw_TH7qCVYl';
-const AUTH_KEY = 'nutrifit:auth', SYNC_KEY = 'nutrifit:sync', SEMCONTA_KEY = 'nutrifit:semconta', ANTERIOR_KEY = 'nutrifit:anterior';
+const AUTH_KEY = 'nutrifit:auth', SYNC_KEY = 'nutrifit:sync', ANTERIOR_KEY = 'nutrifit:anterior';
 const Cloud = {sess:null, meta:{owner:null, dirty:false, remoteAt:null}, state:'off', msg:'', edits:0,
   ready:false, pending:null, busy:null, again:false, timer:null, refreshing:null};
 
@@ -499,7 +499,7 @@ function resolveConflict(useCloud){
 }
 
 /* Login, cadastro e senha */
-const needLogin = () => !Cloud.sess && !lsGet(SEMCONTA_KEY);
+const needLogin = () => !Cloud.sess;
 const redirectTo = () => encodeURIComponent(location.origin + location.pathname);
 async function doLogin(email, password, criar){
   if (criar){
@@ -512,7 +512,7 @@ async function doLogin(email, password, criar){
   } else {
     setSession(await sb('/auth/v1/token?grant_type=password', {method:'POST', body:{email, password}, auth:false}));
   }
-  lsSet(SEMCONTA_KEY, null); Cloud.ready = false;
+  Cloud.ready = false;
   return 'ok';
 }
 async function logout(){
@@ -546,7 +546,7 @@ async function handleAuthLink(){
   try{
     const d = {access_token:h.get('access_token'), refresh_token:h.get('refresh_token'), expires_in:+h.get('expires_in') || 3600};
     setSession(d, await sb('/auth/v1/user', {bearer:d.access_token}));
-    lsSet(SEMCONTA_KEY, null); Cloud.ready = false; render(); cloudRun();
+    Cloud.ready = false; render(); cloudRun();
     if (h.get('type') === 'recovery') passwordForm();
     else toast('E-mail confirmado! Você está conectado.');
   }catch(e){ toast(errPt(e)); }
@@ -690,9 +690,6 @@ function vConfig(){
   return `<div class="page-title"><h2>Conta</h2></div>${vConta()}`;
 }
 function vConta(){
-  if (!Cloud.sess) return `<section class="card"><h3>Conta e nuvem</h3>
-    <div class="warn" style="margin:0 0 12px">Você está usando sem conta: os dados ficam só neste aparelho e podem se perder se o navegador for limpado.</div>
-    <button class="btn btn-primary btn-block" data-a="goLogin">Entrar ou criar conta</button></section>`;
   return `<section class="card"><h3>Conta e nuvem</h3>
     <div style="font-weight:600;word-break:break-all">${esc(Cloud.sess.email)}</div>
     <div class="faint" id="cloudStatus" style="margin:2px 0 12px">${esc(cloudText())}</div>
@@ -714,7 +711,7 @@ function vLogin(){
     <div class="center" style="margin-top:14px"><button class="link" data-a="forgot">Esqueci minha senha</button></div>
     ${n ? `<p class="note">Os ${n} aluno(s) já salvos neste aparelho vão para a sua conta quando você entrar.</p>` : ''}
   </section>
-  <div class="center"><button class="link" style="color:var(--text-faint)" data-a="noAccount">Continuar sem conta (dados só neste aparelho)</button></div>`;
+`;
 }
 function bindLogin(){
   const f = $('#fLogin'), msg = t => { const m = $('#loginMsg'); m.hidden = !t; m.textContent = t || ''; };
@@ -1219,8 +1216,6 @@ const ACT = {
     if (!confirm(`Apagar "${f.n}" da tabela?`)) return;
     S.foods = S.foods.filter(x => x !== f); save(); render();
   },
-  goLogin: () => { lsSet(SEMCONTA_KEY, null); render(); scrollTo(0, 0); },
-  noAccount: () => { lsSet(SEMCONTA_KEY, true); UI.view = cur() ? 'resumo' : 'alunos'; render(); },
   forgot: async () => {
     const email = ($('#fLogin') && $('#fLogin').email.value.trim()) || prompt('Seu e-mail:');
     if (!email) return;
