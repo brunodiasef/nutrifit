@@ -1,6 +1,6 @@
 // Service worker: busca sempre a versão mais nova online e usa o cache
 // só quando estiver sem internet (assim o app abre offline também).
-const CACHE = 'nutrifit-v6';
+const CACHE = 'nutrifit-v7';
 const ASSETS = ['./', './index.html', './alimentos.js', './manifest.json', './marca.png', './nutrifit-logo-impressao.png', './favicon.png', './apple-touch-icon.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
