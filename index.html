@@ -51,6 +51,9 @@ body.login .nav{display:none}
 .login-card h2{margin-bottom:6px}
 .login-card p{margin-bottom:16px}
 .center{text-align:center}
+.convite{font-family:'Oswald',sans-serif;font-size:26px;letter-spacing:.18em;text-align:center;background:var(--surface-2);
+  border:1px dashed var(--border);border-radius:12px;padding:10px;margin-bottom:10px}
+.ok-line{font-weight:600;color:var(--green)}
 
 /* typography */
 h2{font-family:'Oswald',sans-serif;font-weight:600;font-size:24px;letter-spacing:.02em;line-height:1.15}
@@ -323,7 +326,7 @@ function cur(){ return S.alunos.find(a => a.id === S.cur) || null; }
 const SB_URL = 'https://ukejsdsajrtpordtutcl.supabase.co';
 const SB_KEY = 'sb_publishable_8V0GqPzVYJXWQsxaaYVKiw_TH7qCVYl';
 const AUTH_KEY = 'nutrifit:auth', SYNC_KEY = 'nutrifit:sync', ANTERIOR_KEY = 'nutrifit:anterior';
-const Cloud = {sess:null, meta:{owner:null, dirty:false, remoteAt:null}, state:'off', msg:'', edits:0,
+const Cloud = {sess:null, meta:{owner:null, dirty:false, remoteAt:null, papel:null}, state:'off', msg:'', edits:0,
   ready:false, pending:null, busy:null, again:false, timer:null, refreshing:null};
 
 const lsGet = k => { try{ return JSON.parse(localStorage.getItem(k)); }catch(e){ return null; } };
@@ -421,10 +424,21 @@ async function cloudStep(){
   if (!Cloud.sess || Cloud.pending) return;
   setCloud('sync');
   try{
-    if (!Cloud.ready) await reconcile();
-    else if (Cloud.meta.dirty && await push() === 'conflict'){ Cloud.ready = false; Cloud.again = true; return; }
-    if (Cloud.pending) setCloud('conflict');
-    else if (!Cloud.meta.dirty) setCloud('ok');
+    const full = !Cloud.ready, n = Cloud.edits;
+    if (full) await loadPapel();
+    const papel = Cloud.meta.papel;
+    if (papel === 'treinador'){
+      if (full) await reconcile();
+      else if (Cloud.meta.dirty && await push() === 'conflict'){ Cloud.ready = false; Cloud.again = true; return; }
+      if (Cloud.pending) return setCloud('conflict');
+      if (!Cloud.ready) return;
+      await syncTreinador(full);
+    } else {
+      if (papel === 'aluno') await syncAluno(full);
+      Cloud.ready = true;
+      if (Cloud.edits === n){ Cloud.meta.dirty = false; saveMeta(); }
+    }
+    if (!Cloud.meta.dirty) setCloud('ok');
   }catch(e){
     if (!Cloud.sess) return;
     if (e instanceof TypeError || !navigator.onLine) setCloud('offline');
@@ -466,8 +480,13 @@ async function reconcile(){
   Cloud.ready = true;
 }
 function adopt(row){
-  const keep = S.cur;
+  const keep = S.cur, old = S;
   S = Object.assign({alunos:[], foods:[], cur:null}, row.dados);
+  // Diário, água e peso dos alunos com app vêm da tabela de registros, não desta cópia
+  for (const a of S.alunos){
+    const o = Share.rows[a.id] && old.alunos.find(x => x.id === a.id);
+    if (o) Object.assign(a, {diario:o.diario, agua:o.agua, pesos:o.pesos, peso:o.peso});
+  }
   if (S.alunos.some(a => a.id === keep)) S.cur = keep;
   try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
   Object.assign(Cloud.meta, {owner:Cloud.sess.uid, remoteAt:row.atualizado_em, dirty:false}); saveMeta();
@@ -523,8 +542,8 @@ async function logout(){
   const at = Cloud.sess && Cloud.sess.at;
   if (at) fetch(SB_URL + '/auth/v1/logout', {method:'POST', headers:{apikey:SB_KEY, Authorization:'Bearer ' + at}}).catch(() => {});
   endSession(false);
-  Cloud.meta = {owner:null, dirty:false, remoteAt:null}; saveMeta(); lsSet(ANTERIOR_KEY, null);
-  S = {alunos:[], foods:[], cur:null}; try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
+  Cloud.meta = {owner:null, dirty:false, remoteAt:null, papel:null}; saveMeta(); lsSet(ANTERIOR_KEY, null);
+  resetLocal();
   UI.view = 'alunos'; render();
 }
 function passwordForm(){
@@ -551,9 +570,185 @@ async function handleAuthLink(){
     else toast('E-mail confirmado! Você está conectado.');
   }catch(e){ toast(errPt(e)); }
 }
+/* ================= APP DO ALUNO =================
+   Cada aluno convidado tem uma ficha em nutrifit_alunos (plano e metas que o personal publica)
+   e seus registros em nutrifit_registros, um por tipo e data (diário, água, peso).
+   Personal e aluno gravam nos mesmos registros; cada aparelho envia só o que mudou nele. */
+const SHARE_KEY = 'nutrifit:share', CONVITE_KEY = 'nutrifit:convite';
+const shareVazio = () => ({rows:{}, snap:{}, ficha:{}, sid:null});
+let Share = shareVazio(), shareLido = false;
+const saveShare = () => lsSet(SHARE_KEY, Share);
+const isAluno = () => Cloud.meta.papel === 'aluno';
+const persistLocal = () => { try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} };
+function resetLocal(){
+  S = {alunos:[], foods:[], cur:null}; persistLocal();
+  Share = shareVazio(); shareLido = false; saveShare();
+}
+const renderSeLivre = () => { if (UI && !$('#overlay').classList.contains('open')) render(); };
+
+function regMap(a){
+  const m = {};
+  for (const d in a.diario) if (a.diario[d] && a.diario[d].length) m['diario|' + d] = a.diario[d];
+  for (const d in a.agua) if (a.agua[d]) m['agua|' + d] = a.agua[d];
+  for (const p of a.pesos || []) m['peso|' + p.d] = p.kg;
+  return m;
+}
+const canonMap = m => { const o = {}; for (const k in m) o[k] = canon(m[k]); return o; };
+function applyRegMap(a, m){
+  a.diario = {}; a.agua = {}; const ps = [];
+  for (const k in m){
+    const [t, d] = k.split('|');
+    if (t === 'diario') a.diario[d] = m[k]; else if (t === 'agua') a.agua[d] = m[k]; else ps.push({d, kg:m[k]});
+  }
+  ps.sort((x, y) => x.d.localeCompare(y.d));
+  if (ps.length){ a.pesos = ps; a.peso = ps[ps.length - 1].kg; }
+}
+// Junta o que veio da nuvem com o que mudou neste aparelho e ainda não foi enviado
+function mergeRegs(sid, a, rows){
+  const remote = {}; for (const r of rows) remote[r.tipo + '|' + r.data] = r.valor;
+  const local = regMap(a), prev = Share.snap[sid] || canonMap(local), merged = {...remote};
+  for (const k of new Set([...Object.keys(prev), ...Object.keys(local)])){
+    const lc = k in local ? canon(local[k]) : undefined;
+    if (lc !== prev[k]){ if (lc === undefined) delete merged[k]; else merged[k] = local[k]; }
+  }
+  Share.snap[sid] = canonMap(remote);
+  applyRegMap(a, merged);
+}
+async function pushRegs(sid, a){
+  const local = regMap(a), prev = Share.snap[sid] || {}, up = [], del = [];
+  for (const k in local){
+    const c = canon(local[k]);
+    if (c !== prev[k]){ const [tipo, data] = k.split('|'); up.push({aluno_id:sid, tipo, data, valor:local[k], atualizado_em:new Date().toISOString()}); }
+  }
+  for (const k in prev) if (!(k in local)) del.push(k);
+  if (up.length) await sb('/rest/v1/nutrifit_registros?on_conflict=aluno_id,tipo,data', {method:'POST', body:up, prefer:'resolution=merge-duplicates,return=minimal'});
+  for (const k of del){ const [tipo, data] = k.split('|'); await sb(`/rest/v1/nutrifit_registros?aluno_id=eq.${sid}&tipo=eq.${tipo}&data=eq.${data}`, {method:'DELETE'}); }
+  const snap = Share.snap[sid] = {...prev};
+  for (const r of up) snap[r.tipo + '|' + r.data] = canon(r.valor);
+  for (const k of del) delete snap[k];
+  saveShare();
+}
+async function sbAll(path){
+  const out = [];
+  for (let off = 0; ; off += 1000){
+    const page = await sb(`${path}&order=aluno_id,tipo,data&limit=1000&offset=${off}`);
+    out.push(...page); if (page.length < 1000) return out;
+  }
+}
+// O que o aluno vê: dados do cadastro (sem as observações internas), plano e alimentos próprios do personal
+const fichaDe = a => ({nome:a.nome, sexo:a.sexo, idade:a.idade, altura:a.altura, peso:a.peso, atividade:a.atividade, objetivo:a.objetivo,
+  ajuste:a.ajuste, protKg:a.protKg, gordKg:a.gordKg, plano:a.plano, foods:S.foods});
+
+async function loadPapel(){
+  const cv = lsGet(CONVITE_KEY);
+  if (cv){
+    try{ await sb('/rest/v1/rpc/aceitar_convite', {method:'POST', body:{codigo:cv}}); lsSet(CONVITE_KEY, null); resetLocal(); toast('Convite aceito! Seu plano já está no app.'); }
+    catch(e){ if (e instanceof TypeError) throw e; lsSet(CONVITE_KEY, null); toast(errPt(e)); }
+  }
+  const r = await sb('/rest/v1/rpc/meu_papel', {method:'POST', body:{}});
+  const old = Cloud.meta.papel; Cloud.meta.papel = r.papel; saveMeta();
+  if (old !== r.papel){
+    if (old) resetLocal();
+    if (UI){ UI.view = r.papel === 'aluno' ? 'resumo' : 'alunos'; render(); }
+  }
+}
+async function syncTreinador(full){
+  if (full || !shareLido){
+    const rows = await sb('/rest/v1/nutrifit_alunos?select=id,ref,aluno,convite');
+    Share.rows = {}; for (const r of rows) Share.rows[r.ref] = {id:r.id, aluno:r.aluno, convite:r.convite};
+    if (rows.length){
+      const regs = await sbAll(`/rest/v1/nutrifit_registros?select=aluno_id,tipo,data,valor&aluno_id=in.(${rows.map(r => r.id).join(',')})`);
+      for (const r of rows){ const a = S.alunos.find(x => x.id === r.ref); if (a) mergeRegs(r.id, a, regs.filter(g => g.aluno_id === r.id)); }
+      persistLocal();
+    }
+    shareLido = true; saveShare(); renderSeLivre();
+  }
+  for (const ref in Share.rows){
+    const a = S.alunos.find(x => x.id === ref); if (!a) continue;
+    const sid = Share.rows[ref].id, f = fichaDe(a), c = canon(f);
+    if (Share.ficha[sid] !== c){
+      await sb(`/rest/v1/nutrifit_alunos?id=eq.${sid}`, {method:'PATCH', body:{ficha:f, atualizado_em:new Date().toISOString()}, prefer:'return=minimal'});
+      Share.ficha[sid] = c; saveShare();
+    }
+    await pushRegs(sid, a);
+  }
+}
+async function syncAluno(full){
+  if (full || !Share.sid){
+    const rows = await sb('/rest/v1/nutrifit_alunos?select=id,ref,ficha&aluno=eq.' + Cloud.sess.uid);
+    const r = rows[0];
+    if (!r){ Cloud.meta.papel = 'nenhum'; saveMeta(); resetLocal(); return renderSeLivre(); }
+    if (Share.sid !== r.id){ resetLocal(); Share.sid = r.id; }
+    const regs = await sbAll(`/rest/v1/nutrifit_registros?select=tipo,data,valor&aluno_id=eq.${r.id}`);
+    const f = Object.assign({}, r.ficha), antigo = S.alunos[0];
+    const a = Object.assign(f, {id:r.ref, diario:{}, agua:{}, pesos:[]});
+    a.plano ||= {refs:[], obs:''};
+    const foods = a.foods || []; delete a.foods;
+    if (antigo && antigo.id === a.id) Object.assign(a, {diario:antigo.diario, agua:antigo.agua, pesos:antigo.pesos});
+    mergeRegs(r.id, a, regs);
+    S = {alunos:[a], foods, cur:a.id}; persistLocal(); saveShare(); renderSeLivre();
+  }
+  if (S.alunos[0]) await pushRegs(Share.sid, S.alunos[0]);
+}
+
+/* Convites (lado do personal) */
+function novoCodigo(){
+  const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', b = crypto.getRandomValues(new Uint8Array(8));
+  return [...b].map(x => A[x % A.length]).join('');
+}
+const linkConvite = c => `${location.origin}${location.pathname}?convite=${c}`;
+async function criarConvite(){
+  const a = cur(); if (!a) return;
+  if (!navigator.onLine) return toast('Conecte-se à internet para criar o convite');
+  const code = novoCodigo();
+  try{
+    let r = Share.rows[a.id];
+    if (!r){
+      const f = fichaDe(a);
+      try{
+        const rows = await sb('/rest/v1/nutrifit_alunos?select=id', {method:'POST', body:{ref:a.id, convite:code, ficha:f}, prefer:'return=representation'});
+        r = Share.rows[a.id] = {id:rows[0].id, aluno:null, convite:code};
+        Share.ficha[r.id] = canon(f); Share.snap[r.id] = {};
+        await pushRegs(r.id, a);
+      }catch(e){
+        if (e.status !== 409) throw e;
+        const rows = await sb(`/rest/v1/nutrifit_alunos?select=id,aluno&ref=eq.${encodeURIComponent(a.id)}`); // já existia (criada em outro aparelho)
+        r = Share.rows[a.id] = {id:rows[0].id, aluno:rows[0].aluno, convite:null};
+      }
+    }
+    if (r.convite !== code){
+      await sb(`/rest/v1/nutrifit_alunos?id=eq.${r.id}`, {method:'PATCH', body:{convite:code}, prefer:'return=minimal'});
+      r.convite = code;
+    }
+    saveShare(); render(); toast('Convite criado');
+  }catch(e){ toast(errPt(e)); }
+}
+async function removerAcesso(){
+  const a = cur(), r = a && Share.rows[a.id]; if (!r) return;
+  if (!confirm(r.aluno ? `Remover o acesso de ${a.nome.split(' ')[0]} ao app? Os registros já feitos continuam aqui.` : 'Cancelar este convite?')) return;
+  try{
+    await sb(`/rest/v1/nutrifit_alunos?id=eq.${r.id}`, {method:'PATCH', body:{aluno:null, convite:null}, prefer:'return=minimal'});
+    r.aluno = null; r.convite = null; saveShare(); render();
+  }catch(e){ toast(errPt(e)); }
+}
+function enviarConvite(){
+  const a = cur(), r = a && Share.rows[a.id]; if (!r || !r.convite) return;
+  const txt = `Olá, ${a.nome.split(' ')[0]}! Seu plano alimentar está no app NutriFit. Abra o link, crie sua conta com seu e-mail e uma senha, e pronto:\n${linkConvite(r.convite)}`;
+  window.open('https://wa.me/?text=' + encodeURIComponent(txt), '_blank');
+}
+async function copiarConvite(){
+  const a = cur(), r = a && Share.rows[a.id]; if (!r || !r.convite) return;
+  try{ await navigator.clipboard.writeText(linkConvite(r.convite)); toast('Link copiado'); }
+  catch(e){ prompt('Copie o link:', linkConvite(r.convite)); }
+}
+
 function cloudInit(){
   Cloud.sess = lsGet(AUTH_KEY);
-  Cloud.meta = Object.assign({owner:null, dirty:false, remoteAt:null}, lsGet(SYNC_KEY));
+  Cloud.meta = Object.assign({owner:null, dirty:false, remoteAt:null, papel:null}, lsGet(SYNC_KEY));
+  if (!Cloud.meta.papel && Cloud.meta.owner) Cloud.meta.papel = 'treinador'; // aparelhos da versão anterior
+  Share = Object.assign(shareVazio(), lsGet(SHARE_KEY));
+  const q = new URLSearchParams(location.search), cv = q.get('convite');
+  if (cv){ lsSet(CONVITE_KEY, cv.trim().toUpperCase()); q.delete('convite'); history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '') + location.hash); }
   if (Cloud.sess) setCloud('sync');
   addEventListener('online', () => cloudRun());
   document.addEventListener('visibilitychange', () => {
@@ -699,17 +894,20 @@ function vConta(){
 }
 function vLogin(){
   const n = S.alunos.length;
+  const convite = lsGet(CONVITE_KEY);
   return `<section class="card login-card">
-    <h2>Entrar</h2>
-    <p class="muted">Seus alunos ficam salvos na nuvem e aparecem em qualquer celular ou computador em que você entrar.</p>
+    <h2>${convite ? 'Bem-vindo(a)!' : 'Entrar'}</h2>
+    <p class="muted">${convite ? 'Você recebeu um convite do seu personal. Crie sua conta com seu e-mail e uma senha. Se já tiver conta, é só entrar.'
+      : 'Entre com seu e-mail e senha para acessar seus dados em qualquer celular ou computador.'}</p>
     <form id="fLogin">
       <label class="f">E-mail<input name="email" type="email" autocomplete="username" inputmode="email" required></label>
       <label class="f">Senha<input name="senha" type="password" autocomplete="current-password" minlength="6" required></label>
-      <div class="btn-row"><button class="btn" value="up">Criar conta</button><button class="btn btn-primary" value="in">Entrar</button></div>
+      <div class="btn-row">${convite ? '<button class="btn" value="in">Entrar</button><button class="btn btn-primary" value="up">Criar conta</button>'
+        : '<button class="btn" value="up">Criar conta</button><button class="btn btn-primary" value="in">Entrar</button>'}</div>
       <div class="warn" id="loginMsg" hidden></div>
     </form>
     <div class="center" style="margin-top:14px"><button class="link" data-a="forgot">Esqueci minha senha</button></div>
-    ${n ? `<p class="note">Os ${n} aluno(s) já salvos neste aparelho vão para a sua conta quando você entrar.</p>` : ''}
+    ${n && !convite ? `<p class="note">Os ${n} aluno(s) já salvos neste aparelho vão para a sua conta quando você entrar.</p>` : ''}
   </section>
 `;
 }
@@ -722,7 +920,7 @@ function bindLogin(){
     try{
       const r = await doLogin(f.email.value.trim(), f.senha.value, criar);
       if (r === 'confirm'){ msg('Conta criada! Abra o link que enviamos para o seu e-mail para confirmar e depois toque em Entrar.'); btns.forEach(b => b.disabled = false); return; }
-      UI.view = cur() ? 'resumo' : 'alunos'; render(); cloudRun(); toast('Conectado');
+      UI.view = cur() ? 'resumo' : 'alunos'; render(); cloudRun();
     }catch(err){ msg(errPt(err)); btns.forEach(b => b.disabled = false); }
   });
 }
@@ -738,7 +936,7 @@ function vResumo(a){
   return `<section class="card" style="margin-top:16px">
     <div class="hero-top"><div><div class="eyebrow">${OBJ[a.objetivo].label}</div><h2>${esc(a.nome)}</h2>
       <div class="muted" style="font-size:13px">${a.sexo === 'M' ? 'Masculino' : 'Feminino'} · ${a.idade} anos · ${a.altura} cm · ${r1(a.peso)} kg</div></div>
-      <button class="btn btn-sm" data-a="editAluno">Editar</button></div>
+      ${isAluno() ? '' : '<button class="btn btn-sm" data-a="editAluno">Editar</button>'}</div>
     <div class="stats3 num">
       <div class="stat"><small>TMB</small><b>${r0(c.tmb)}</b><small>kcal</small></div>
       <div class="stat"><small>Gasto/dia</small><b>${r0(c.get)}</b><small>kcal</small></div>
@@ -753,11 +951,11 @@ function vResumo(a){
     ${macro('Proteína', c.p, a.protKg, kP, 'var(--prot)')}
     ${macro('Carboidrato', c.c, c.c/a.peso, kC, 'var(--carb)')}
     ${macro('Gordura', c.g, a.gordKg, kG, 'var(--fat)')}
-    <div class="adj">
+    ${isAluno() ? '' : `<div class="adj">
       <label>Ajuste kcal<input type="number" inputmode="numeric" step="50" value="${a.ajuste}" data-in="ajuste"></label>
       <label>Prot g/kg<input type="number" inputmode="decimal" step="0.1" value="${a.protKg}" data-in="protKg"></label>
       <label>Gord g/kg<input type="number" inputmode="decimal" step="0.1" value="${a.gordKg}" data-in="gordKg"></label>
-    </div>
+    </div>`}
     <div class="note">Carboidrato = o que sobra da meta depois de proteína e gordura. Cálculo pela fórmula de Mifflin-St Jeor × fator de atividade.</div>
   </section>
 
@@ -778,13 +976,38 @@ function vResumo(a){
   <section class="card">
     <div class="card-head"><h3>Plano alimentar</h3><button class="link" data-a="nav" data-v="plano">Abrir plano</button></div>
     ${totals4(plano)}
-    <div class="note">${plano.k === 0 ? 'Plano ainda vazio.' : Math.abs(diff) <= c.meta*0.05 ? 'O plano está dentro da meta (±5%).' :
+    <div class="note">${plano.k === 0 ? 'Plano ainda vazio.' : isAluno() ? '' : Math.abs(diff) <= c.meta*0.05 ? 'O plano está dentro da meta (±5%).' :
       `O plano está <b style="color:var(--amber)">${r0(Math.abs(diff))} kcal ${diff > 0 ? 'acima' : 'abaixo'}</b> da meta.`}</div>
   </section>
-  ${a.obs ? `<section class="card"><h3>Observações</h3><div class="muted" style="white-space:pre-wrap">${esc(a.obs)}</div></section>` : ''}`;
+  ${a.obs && !isAluno() ? `<section class="card"><h3>Observações</h3><div class="muted" style="white-space:pre-wrap">${esc(a.obs)}</div></section>` : ''}
+  ${isAluno() ? '' : vAcesso(a)}`;
+}
+function vAcesso(a){
+  const r = Share.rows[a.id], nome = esc(a.nome.split(' ')[0]);
+  let body;
+  if (!r || (!r.aluno && !r.convite)) body = `<div class="faint" style="margin-bottom:12px">Convide ${nome} para ver o plano no próprio celular e anotar o diário, a água e o peso. Tudo o que ${nome} registrar aparece aqui.</div>
+    <button class="btn btn-primary btn-block" data-a="convidar">Convidar ${nome}</button>`;
+  else if (r.convite) body = `<div class="faint" style="margin-bottom:10px">${r.aluno ? `Novo convite criado. Quando ${nome} usar, o acesso antigo deixa de valer.` : `Convite pronto. Envie o link para ${nome}: ao abrir, é só criar uma conta com e-mail e senha.`}</div>
+    <div class="convite">${esc(r.convite)}</div>
+    <div class="btn-row"><button class="btn btn-primary" data-a="enviarConvite">Enviar pelo WhatsApp</button><button class="btn" data-a="copiarConvite">Copiar link</button></div>
+    <div class="center" style="margin-top:12px"><button class="link" style="color:var(--text-faint)" data-a="removerAcesso">${r.aluno ? 'Remover acesso' : 'Cancelar convite'}</button></div>`;
+  else body = `<div class="ok-line">✓ ${nome} está usando o app</div>
+    <div class="faint" style="margin:2px 0 12px">O plano que você monta aparece para ${nome} automaticamente, e o que ${nome} registra aparece aqui no Diário e em Água/Peso.</div>
+    <div class="btn-row"><button class="btn" data-a="convidar">Novo convite</button><button class="btn btn-danger" data-a="removerAcesso">Remover acesso</button></div>`;
+  return `<section class="card"><h3>App do aluno</h3>${body}</section>`;
+}
+function vSemVinculo(){
+  return `<section class="card login-card">
+    <h2>Quase lá</h2>
+    <p class="muted">Sua conta (${esc(Cloud.sess.email)}) ainda não está ligada a um personal. Abra o link de convite que você recebeu ou digite o código abaixo.</p>
+    <form id="fConvite"><label class="f">Código do convite<input name="c" autocomplete="off" autocapitalize="characters" required></label>
+      <button class="btn btn-primary btn-block">Usar convite</button></form>
+    <div class="center" style="margin-top:14px"><button class="link" style="color:var(--text-faint)" data-a="logout">Sair</button></div>
+  </section>`;
 }
 
 function vPlano(a){
+  if (isAluno()) return vPlanoAluno(a);
   const c = calc(a), m = fmap(), tot = sum(a.plano.refs.flatMap(r => r.itens), m);
   const refs = a.plano.refs.map(r => {
     const t = sum(r.itens, m);
@@ -805,6 +1028,23 @@ function vPlano(a){
   </section>
   <div class="btn-row" style="margin-bottom:12px"><button class="btn" data-a="sharePlan">Enviar (WhatsApp)</button><button class="btn btn-primary" data-a="printPlan">Imprimir / PDF</button></div>
   <div class="note" style="text-align:center">Toque no nome da refeição para renomear, mudar o horário ou excluir.<br>Toque num alimento para mudar a quantidade.</div>`;
+}
+
+function vPlanoAluno(a){
+  const c = calc(a), m = fmap(), tot = sum(a.plano.refs.flatMap(r => r.itens), m);
+  const refs = a.plano.refs.map(r => {
+    const t = sum(r.itens, m);
+    return `<section class="card">
+      <div class="meal-head"><span class="t">${esc(r.nome)}</span><span class="h">${esc(r.hora || '')}</span><span class="kcal num">${r0(t.k)}<small>kcal</small></span></div>
+      <div class="meal-macros num">P ${r0(t.p)} g · C ${r0(t.c)} g · G ${r0(t.g)} g</div>
+      ${r.itens.map(it => itemRow(it, m, '')).join('') || '<div class="empty">Nenhum alimento nesta refeição.</div>'}
+    </section>`;
+  }).join('');
+  return `<div class="page-title"><h2>Meu plano</h2></div>
+  <section class="card">${progAll(tot, c)}</section>
+  ${refs || '<section class="card"><div class="empty">Seu personal ainda não montou o plano alimentar.</div></section>'}
+  ${a.plano.obs ? `<section class="card"><h3>Orientações</h3><div class="muted" style="white-space:pre-wrap">${esc(a.plano.obs)}</div></section>` : ''}
+  ${refs ? '<button class="btn btn-block" data-a="printPlan" style="margin-bottom:12px">Salvar em PDF / imprimir</button>' : ''}`;
 }
 
 function dateNav(){
@@ -927,16 +1167,21 @@ function drawFoodList(){
 
 /* ================= RENDER ================= */
 function render(){
-  const login = needLogin();
-  document.body.classList.toggle('login', login);
+  const login = needLogin(), papel = Cloud.meta.papel, aluno = papel === 'aluno';
+  const a = cur(), espera = !login && (!papel || (aluno && !a));
+  const semNav = login || espera || papel === 'nenhum';
+  document.body.classList.toggle('login', semNav);
   setCloud(Cloud.state, Cloud.msg);
-  $('#sync').hidden = login;
-  if (login){ $('#who').hidden = true; $('#main').innerHTML = vLogin(); bindLogin(); return; }
-  const a = cur();
+  $('#sync').hidden = semNav;
+  const who = $('#who'), main = $('#main');
+  who.hidden = semNav || aluno || !a; if (a) who.textContent = a.nome.split(' ')[0];
+  if (login){ main.innerHTML = vLogin(); bindLogin(); return; }
+  if (espera){ main.innerHTML = `<section class="card login-card center"><p class="muted">${navigator.onLine ? 'Carregando seus dados…' : 'Conecte-se à internet para carregar seus dados pela primeira vez.'}</p>
+    <button class="link" style="color:var(--text-faint)" data-a="logout">Sair</button></section>`; return; }
+  if (papel === 'nenhum'){ main.innerHTML = vSemVinculo(); bindConvite(); return; }
+  const views = aluno ? ['resumo','plano','diario','agua','conta'] : ['alunos','alimentos','conta','resumo','plano','diario','agua'];
+  if (!views.includes(UI.view)) UI.view = aluno ? 'resumo' : 'alunos';
   if (!a && !['alunos','alimentos','conta'].includes(UI.view)) UI.view = 'alunos';
-  const who = $('#who');
-  who.hidden = !a; if (a) who.textContent = a.nome.split(' ')[0];
-  const main = $('#main');
   main.innerHTML = UI.view === 'alunos' ? vAlunos()
     : UI.view === 'conta' ? vConfig()
     : UI.view === 'alimentos' ? vAlimentos()
@@ -944,9 +1189,17 @@ function render(){
     : UI.view === 'plano' ? vPlano(a)
     : UI.view === 'diario' ? vDiario(a)
     : vAgua(a);
-  const tabs = [['alunos','Alunos'],['resumo','Resumo'],['plano','Plano'],['diario','Diário'],['agua','Água/Peso']];
+  const tabs = aluno ? [['resumo','Início'],['plano','Plano'],['diario','Diário'],['agua','Água/Peso']]
+    : [['alunos','Alunos'],['resumo','Resumo'],['plano','Plano'],['diario','Diário'],['agua','Água/Peso']];
+  $('#nav').style.gridTemplateColumns = `repeat(${tabs.length},1fr)`;
   $('#nav').innerHTML = tabs.map(([v, l]) => `<button data-a="nav" data-v="${v}" class="${UI.view === v || (v === 'alunos' && ['alimentos','conta'].includes(UI.view)) ? 'on' : ''}" ${v !== 'alunos' && !a ? 'disabled' : ''}>${svg(v)}${l}</button>`).join('');
   if ($("#foodSearch")){ $("#foodSearch").addEventListener("input", drawFoodList); $("#foodCat").addEventListener("change", drawFoodList); drawFoodList(); }
+}
+function bindConvite(){
+  $('#fConvite').addEventListener('submit', e => {
+    e.preventDefault(); lsSet(CONVITE_KEY, e.target.c.value.trim().toUpperCase());
+    Cloud.ready = false; cloudRun();
+  });
 }
 
 /* ================= MODAL / TOAST ================= */
@@ -1153,8 +1406,14 @@ const ACT = {
   selAluno: el => { S.cur = el.dataset.id; save(); UI.view = 'resumo'; UI.date = today(); render(); scrollTo(0, 0); },
   newAluno: () => alunoForm(null),
   editAluno: () => alunoForm(cur()),
-  delAluno: () => {
+  delAluno: async () => {
     const a = cur(); if (!confirm(`Excluir ${a.nome} e todos os dados dele(a)? Isso não pode ser desfeito.`)) return;
+    const r = Share.rows[a.id];
+    if (r){ // aluno com app: apaga também a ficha e os registros na nuvem
+      try{ await sb(`/rest/v1/nutrifit_alunos?id=eq.${r.id}`, {method:'DELETE'}); }
+      catch(e){ return toast(e instanceof TypeError ? 'Conecte-se à internet para excluir um aluno que usa o app' : errPt(e)); }
+      delete Share.rows[a.id]; saveShare();
+    }
     S.alunos = S.alunos.filter(x => x !== a); S.cur = null; UI.view = 'alunos'; save(); closeModal(); render();
   },
   closeModal,
@@ -1224,6 +1483,10 @@ const ACT = {
   },
   syncNow: () => { Cloud.ready = false; cloudRun().then(() => { if (Cloud.state === 'ok') toast('Sincronizado'); }); },
   changePass: passwordForm,
+  convidar: criarConvite,
+  enviarConvite,
+  copiarConvite,
+  removerAcesso,
   logout,
   askConflict,
   keepLocal: () => resolveConflict(false),
