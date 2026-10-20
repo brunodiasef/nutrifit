@@ -1,0 +1,17 @@
+{
+  "name": "nutrifit-abertura-video",
+  "private": true,
+  "scripts": {
+    "render": "remotion render src/index.ts Abertura out/nutrifit-abertura.mp4 --codec h264 --crf 16",
+    "sons": "node gerar-sons.js"
+  },
+  "dependencies": {
+    "@fontsource/inter": "5.1.0",
+    "@fontsource/oswald": "5.1.0",
+    "@remotion/cli": "4.0.537",
+    "motion": "12.23.24",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.537"
+  }
+}

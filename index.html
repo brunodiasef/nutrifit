@@ -197,11 +197,19 @@ textarea{resize:vertical;min-height:70px}
   padding:10px 16px;border-radius:12px;font-weight:600;font-size:14px;z-index:60;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw;text-align:center}
 .toast.show{opacity:1}
 
+/* abertura */
+.abertura{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:radial-gradient(ellipse at 50% 42%, #142050 0%, var(--bg) 62%);cursor:pointer;
+  animation:abSegura .4s ease-in 6s forwards} /* segurança: some sozinha se algo falhar */
+.ab-logo{width:min(86vw,440px);aspect-ratio:600/660}
+.ab-pular{position:absolute;right:16px;bottom:calc(20px + env(safe-area-inset-bottom));font-size:13px;font-weight:600;color:var(--text-faint);padding:8px 12px}
+@keyframes abSegura{to{opacity:0;visibility:hidden;pointer-events:none}}
+
 /* print */
 #print{display:none}
 @media print{
   body{background:#fff;color:#000}
-  .app,.nav,.overlay,.toast{display:none!important}
+  .app,.nav,.overlay,.toast,.abertura{display:none!important}
   #print{display:block;font-family:'Inter',sans-serif;color:#000;padding:10px}
   #print .ph{display:flex;align-items:center;gap:16px;border-bottom:3px solid #4C6BFF;padding-bottom:12px;margin-bottom:16px}
   #print .ph img{height:110px}
@@ -217,6 +225,7 @@ textarea{resize:vertical;min-height:70px}
 </style>
 </head>
 <body>
+<div class="abertura" id="abertura" aria-hidden="true"><div class="ab-logo"></div><button class="ab-pular" type="button">Pular</button></div>
 
 <div class="app">
   <header class="top">
@@ -236,6 +245,8 @@ textarea{resize:vertical;min-height:70px}
 <div class="toast" id="toast"></div>
 <div id="print"></div>
 
+<script src="abertura.js"></script>
+<script src="vendor/motion-12.23.24.min.js"></script>
 <script src="alimentos.js"></script>
 <script>
 /* ================= TABELA DE ALIMENTOS =================
@@ -1508,11 +1519,47 @@ document.addEventListener('change', e => {
   a[k] = v; save(); render();
 });
 
+/* ================= ABERTURA =================
+   Animação da logo (abertura.js) tocada pelo Motion. Completa na primeira vez do dia;
+   nas outras, só o final (logo já forte + boas-vindas). Tocar em qualquer lugar pula. */
+function saudacao(){
+  if (!Cloud.sess) return 'Bem-vindo ao NutriFit!';
+  if (isAluno()){
+    const a = S.alunos[0]; if (!a) return 'Bem-vindo(a)!';
+    return `${a.sexo === 'F' ? 'Bem-vinda' : 'Bem-vindo'}, ${a.nome.trim().split(' ')[0]}!`;
+  }
+  return 'Bem-vindo de volta!';
+}
+function abertura(){
+  const el = $('#abertura'); if (!el) return;
+  const A = window.NFAbertura, M = window.Motion;
+  if (!A){ el.remove(); return; }
+  const box = el.querySelector('.ab-logo'), titulo = saudacao();
+  const reduz = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let curta = false;
+  try{ curta = localStorage.getItem('nutrifit:abertura') === today(); localStorage.setItem('nutrifit:abertura', today()); }catch(e){}
+  const desenha = t => { box.innerHTML = A.frame(t, {titulo, saida:false}); };
+  let fim = false, controle = null;
+  const fechar = () => {
+    if (fim) return; fim = true;
+    if (controle) controle.stop();
+    const tira = () => el.remove();
+    if (M && !reduz) M.animate(el, {opacity:[1, 0], scale:[1, 1.04]}, {duration:0.32, ease:[0.7, 0, 0.84, 0]}).finished.then(tira, tira);
+    else { el.style.transition = 'opacity .25s'; el.style.opacity = 0; setTimeout(tira, 260); }
+  };
+  el.addEventListener('click', fechar);
+  if (reduz || !M){ desenha(A.T.sai - 0.01); setTimeout(fechar, reduz ? 900 : 1200); return; }
+  const t0 = curta ? A.CURTA : 0, t1 = A.T.sai;
+  desenha(t0);
+  controle = M.animate(t0, t1, {duration:t1 - t0, ease:'linear', onUpdate:desenha, onComplete:() => setTimeout(fechar, 280)});
+}
+
 /* ================= INÍCIO ================= */
 S = load();
 UI = {view: cur() ? 'resumo' : 'alunos', date: today()};
 cloudInit();
 render();
+abertura();
 handleAuthLink();
 if (Cloud.sess) cloudRun();
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
