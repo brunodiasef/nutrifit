@@ -201,7 +201,7 @@ textarea{resize:vertical;min-height:70px}
 .abertura{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;
   background:radial-gradient(ellipse at 50% 42%, #142050 0%, var(--bg) 62%);cursor:pointer;
   animation:abSegura .4s ease-in 6s forwards} /* segurança: some sozinha se algo falhar */
-.ab-logo{width:min(86vw,440px);aspect-ratio:600/660}
+.ab-logo{width:min(94vw,560px);aspect-ratio:1600/1262}
 .ab-pular{position:absolute;right:16px;bottom:calc(20px + env(safe-area-inset-bottom));font-size:13px;font-weight:600;color:var(--text-faint);padding:8px 12px}
 @keyframes abSegura{to{opacity:0;visibility:hidden;pointer-events:none}}
 
@@ -1520,25 +1520,16 @@ document.addEventListener('change', e => {
 });
 
 /* ================= ABERTURA =================
-   Animação da logo (abertura.js) tocada pelo Motion. Completa na primeira vez do dia;
-   nas outras, só o final (logo já forte + boas-vindas). Tocar em qualquer lugar pula. */
-function saudacao(){
-  if (!Cloud.sess) return 'Bem-vindo ao NutriFit!';
-  if (isAluno()){
-    const a = S.alunos[0]; if (!a) return 'Bem-vindo(a)!';
-    return `${a.sexo === 'F' ? 'Bem-vinda' : 'Bem-vindo'}, ${a.nome.trim().split(' ')[0]}!`;
-  }
-  return 'Bem-vindo de volta!';
-}
+   Animação da logo (abertura.js) tocada pelo Motion: B e P gordos fazem 3 levantamentos terra,
+   emagrecem e o nome cresce até a logo ficar igual à original. Completa na primeira vez do dia;
+   nas outras, só a logo por um instante. Tocar em qualquer lugar pula. */
 function abertura(){
   const el = $('#abertura'); if (!el) return;
   const A = window.NFAbertura, M = window.Motion;
   if (!A){ el.remove(); return; }
-  const box = el.querySelector('.ab-logo'), titulo = saudacao();
   const reduz = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let curta = false;
   try{ curta = localStorage.getItem('nutrifit:abertura') === today(); localStorage.setItem('nutrifit:abertura', today()); }catch(e){}
-  const desenha = t => { box.innerHTML = A.frame(t, {titulo, saida:false}); };
   let fim = false, controle = null;
   const fechar = () => {
     if (fim) return; fim = true;
@@ -1548,10 +1539,14 @@ function abertura(){
     else { el.style.transition = 'opacity .25s'; el.style.opacity = 0; setTimeout(tira, 260); }
   };
   el.addEventListener('click', fechar);
-  if (reduz || !M){ desenha(A.T.sai - 0.01); setTimeout(fechar, reduz ? 900 : 1200); return; }
-  const t0 = curta ? A.CURTA : 0, t1 = A.T.sai;
-  desenha(t0);
-  controle = M.animate(t0, t1, {duration:t1 - t0, ease:'linear', onUpdate:desenha, onComplete:() => setTimeout(fechar, 280)});
+  const anim = A.montar(el.querySelector('.ab-logo'), {base:'abertura/', ext:'webp'});
+  const espera = new Promise(res => setTimeout(() => res(false), 1500));   // sem travar o app se as imagens demorarem
+  Promise.race([anim.pronto.then(() => true), espera]).then(ok => {
+    if (!ok || fim) return fechar();
+    if (reduz || !M || curta){ anim.pintar(A.DUR); setTimeout(fechar, 900); return; }
+    anim.pintar(0);
+    controle = M.animate(0, A.DUR, {duration:A.DUR, ease:'linear', onUpdate:t => anim.pintar(t), onComplete:() => setTimeout(fechar, 450)});
+  });
 }
 
 /* ================= INÍCIO ================= */

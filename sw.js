@@ -1,7 +1,7 @@
 // Service worker: busca sempre a versão mais nova online e usa o cache
 // só quando estiver sem internet (assim o app abre offline também).
-const CACHE = 'nutrifit-v8';
-const ASSETS = ['./', './index.html', './alimentos.js', './abertura.js', './vendor/motion-12.23.24.min.js', './manifest.json', './marca.png', './nutrifit-logo-impressao.png', './favicon.png', './apple-touch-icon.png', './icon-192.png', './icon-512.png'];
+const CACHE = 'nutrifit-v9';
+const ASSETS = ['./', './index.html', './alimentos.js', './abertura.js', './abertura/letras.webp', './abertura/halter.webp', './abertura/textos.webp', './abertura/logo.webp', './abertura/mapa.png', './vendor/motion-12.23.24.min.js', './manifest.json', './marca.png', './nutrifit-logo-impressao.png', './favicon.png', './apple-touch-icon.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));

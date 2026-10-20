@@ -26,6 +26,6 @@ wav('pop', 0.18, (t, p) => Math.sin(2 * Math.PI * (900 * Math.exp(-t * 30) + 260
 // saída
 wav('swoosh-out', 0.4, (t, p, low) => low(rnd()) * 2.6 * Math.sin(Math.PI * (1 - p)) ** 2 * (1 - p));
 // fundo: acorde suave (Ré maior) com entrada e saída
-wav('pad', 4.4, (t, p) => [146.8, 220, 293.7, 370].reduce((a, f, k) => a + Math.sin(2 * Math.PI * f * t + k) * (k === 3 ? 0.5 : 1), 0) * 0.13
-  * Math.min(1, t / 0.8) * Math.min(1, (4.4 - t) / 0.5) * (0.85 + 0.15 * Math.sin(t * 5)));
+wav('pad', 4.5, (t, p) => [146.8, 220, 293.7, 370].reduce((a, f, k) => a + Math.sin(2 * Math.PI * f * t + k) * (k === 3 ? 0.5 : 1), 0) * 0.13
+  * Math.min(1, t / 0.8) * Math.min(1, (4.5 - t) / 0.5) * (0.85 + 0.15 * Math.sin(t * 5)));
 console.log('sons gerados');
